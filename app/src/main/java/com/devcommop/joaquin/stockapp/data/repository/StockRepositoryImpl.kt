@@ -1,7 +1,9 @@
 package com.devcommop.joaquin.stockapp.data.repository
 
+import com.devcommop.joaquin.stockapp.data.csv.CSVParser
 import com.devcommop.joaquin.stockapp.data.local.StockDatabase
 import com.devcommop.joaquin.stockapp.data.mapper.toCompanyListing
+import com.devcommop.joaquin.stockapp.data.mapper.toCompanyListingEntity
 import com.devcommop.joaquin.stockapp.data.remote.StockApi
 import com.devcommop.joaquin.stockapp.domain.model.CompanyListing
 import com.devcommop.joaquin.stockapp.domain.repository.StockRepository
@@ -18,7 +20,8 @@ import javax.inject.Singleton
 @Singleton
 class StockRepositoryImpl @Inject constructor(
     val api: StockApi,
-    val db: StockDatabase
+    val db: StockDatabase,
+    val companyListingsParser: CSVParser<CompanyListing>
 ): StockRepository {
 
     private val dao = db.dao
@@ -42,17 +45,31 @@ class StockRepositoryImpl @Inject constructor(
                 emit(Resource.Loading(false))
                 return@flow//flow se bahar aa jao agey lines execute mat karo. E! why -> Simple return won't work
             }
-            val remoteList = try{
+            val remoteListings = try{
                 val response = api.getListings()
-                //todo: Now read that ResponseBody as CSV file
+                //Now read that ResponseBody as CSV file
                 val responseStream = response.byteStream()
-                val csvReader = CSVReader(InputStreamReader(responseStream))
+                companyListingsParser.parse(responseStream)
             }catch(e: IOException){
                 e.printStackTrace()
                 emit(Resource.Error("Couldn't load data: ${e.message}"))
+                null
             }catch(e: HttpException){
                 e.printStackTrace()
                 emit(Resource.Error("Couldn't load data: ${e.message}"))
+                null
+            }
+            remoteListings?.let { listings ->
+                dao.clearCompanyListings()
+                dao.insertCompanyListings(//here we implement single source of truth. i.e. we show give data to UI only from cache and not from api. To do so we first store api data in cache and then give the cached data to ui
+                    listings.map { it.toCompanyListingEntity() }
+                )
+                emit(Resource.Loading(false))//E! --> why this line giving error when placed at last
+                emit(Resource.Success(
+                    data = dao
+                        .searchCompanyListing("")
+                        .map{ it.toCompanyListing() }
+                ))
             }
         }
     }
